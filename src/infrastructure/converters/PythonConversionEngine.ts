@@ -4,11 +4,25 @@ import { resolve } from 'node:path';
 
 import type { IConversionEngine } from '../../domain/interfaces/IConversionEngine.js';
 import { ConversionError } from '../../domain/errors/ConversionError.js';
+import type { ConversionOptions } from '../../domain/value-objects/ConversionOptions.js';
 
 interface PythonConversionEngineOptions {
   pythonBin: string;
   scriptPath: string;
   timeoutMs: number;
+}
+
+export function buildScriptArguments(
+  scriptPath: string,
+  inputPath: string,
+  outputDirectory: string,
+  options: ConversionOptions,
+): string[] {
+  const commentedFieldsFlag = options.keepCommentedFields
+    ? '--keep-commented-fields'
+    : '--no-keep-commented-fields';
+
+  return [scriptPath, inputPath, outputDirectory, commentedFieldsFlag];
 }
 
 export class PythonConversionEngine implements IConversionEngine {
@@ -17,13 +31,14 @@ export class PythonConversionEngine implements IConversionEngine {
   execute(
     inputPath: string,
     outputDirectory: string,
+    conversionOptions: ConversionOptions,
   ): Promise<void> {
     return new Promise((resolvePromise, reject) => {
       const scriptPath = resolve(this.options.scriptPath);
 
       const child = spawn(
         this.options.pythonBin,
-        [scriptPath, inputPath, outputDirectory],
+        buildScriptArguments(scriptPath, inputPath, outputDirectory, conversionOptions),
         {
           shell: false,
           windowsHide: true,

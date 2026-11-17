@@ -11,6 +11,7 @@ Fluxo:
 5. Gerar relatório final
 """
 
+import argparse
 import sys
 import traceback
 from pathlib import Path
@@ -24,10 +25,17 @@ from converter_inputsubmission_to_itemsubmission import InputSubmissionToItemSub
 class DSpaceConverterOrchestrator:
     """Orquestra a conversão completa de DSpace 5 para DSpace 9"""
     
-    def __init__(self, input_forms_path: Path, output_dir: Path, verbose: bool = True):
+    def __init__(
+        self,
+        input_forms_path: Path,
+        output_dir: Path,
+        verbose: bool = True,
+        keep_commented_fields: bool = True,
+    ):
         self.input_forms_path = input_forms_path
         self.output_dir = output_dir
         self.verbose = verbose
+        self.keep_commented_fields = keep_commented_fields
         
         # Arquivos de saída
         self.submission_forms_path = output_dir / "submission-forms.xml"
@@ -98,7 +106,10 @@ class DSpaceConverterOrchestrator:
         self.print_step(1, "Convertendo submission-forms.xml")
         
         try:
-            converter = InputFormsToSubmissionFormsConverter(verbose=self.verbose)
+            converter = InputFormsToSubmissionFormsConverter(
+                verbose=self.verbose,
+                keep_commented_fields=self.keep_commented_fields,
+            )
             self.log("Iniciando conversão de formulários...")
             
             stats = converter.convert(self.input_forms_path, self.submission_forms_path)
@@ -107,6 +118,7 @@ class DSpaceConverterOrchestrator:
             
             self.log(f"[OK] Formulários convertidos: {stats['forms_converted']}")
             self.log(f"[OK] Campos convertidos: {stats['fields_converted']}")
+            self.log(f"[OK] Campos comentados preservados: {stats['commented_fields_kept']}")
             self.log(f"[OK] Arquivo gerado: {stats['output_file']}")
             
             return True
@@ -252,17 +264,21 @@ class DSpaceConverterOrchestrator:
 def print_usage():
     """Imprime mensagem de uso"""
     print("""
-Uso: python main.py [input_forms.xml] [output_directory]
+Uso: python main.py [input_forms.xml] [output_directory] [--keep-commented-fields | --no-keep-commented-fields]
 
 Argumentos:
   [input_forms.xml]     Caminho para o arquivo input-forms.xml do DSpace 5
                         (padrão: forms-dspace5/input-forms.xml)
   [output_directory]    Diretório de saída (padrão: result_normalize_dspace9/)
+  --keep-commented-fields
+                        Preserva os campos comentados no submission-forms.xml (padrão)
+  --no-keep-commented-fields
+                        Remove os campos comentados do submission-forms.xml
 
 Exemplos:
   python main.py
   python main.py forms-dspace5/input-forms.xml
-  python main.py forms-dspace5/input-forms.xml result_normalize_dspace9/
+  python main.py forms-dspace5/input-forms.xml result_normalize_dspace9/ --no-keep-commented-fields
 
 Fluxo de Conversão:
   1. Converte input-forms.xml -> submission-forms.xml
@@ -274,18 +290,31 @@ Nota: O arquivo de entrada é lido duas vezes por diferentes conversores.
     """)
 
 
+def parse_args(argv: list) -> argparse.Namespace:
+    """Interpreta os argumentos de linha de comando"""
+    parser = argparse.ArgumentParser(description="Conversor DSpace 5 -> DSpace 9")
+    # Padrão: arquivos DSpace 5 a converter ficam em forms-dspace5/
+    parser.add_argument("input_forms", nargs="?", default="forms-dspace5/input-forms.xml")
+    parser.add_argument("output_dir", nargs="?", default="result_normalize_dspace9")
+    parser.add_argument(
+        "--keep-commented-fields",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="preserva os campos comentados do input-forms.xml (padrão)",
+    )
+    return parser.parse_args(argv)
+
+
 def main():
     """Função principal"""
-    
-    # Padrão: arquivos DSpace 5 a converter ficam em forms-dspace5/
-    input_forms_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("forms-dspace5/input-forms.xml")
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("result_normalize_dspace9")
+    args = parse_args(sys.argv[1:])
     
     # Criar orquestrador
     orchestrator = DSpaceConverterOrchestrator(
-        input_forms_path=input_forms_path,
-        output_dir=output_dir,
-        verbose=True
+        input_forms_path=Path(args.input_forms),
+        output_dir=Path(args.output_dir),
+        verbose=True,
+        keep_commented_fields=args.keep_commented_fields,
     )
     
     # Executar conversão

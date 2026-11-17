@@ -74,3 +74,55 @@ describe('ConvertDspaceFiles', () => {
     await artifact.cleanup();
   });
 });
+
+describe('ConvertDspaceFiles conversion options', () => {
+  const validInputForms = Buffer.from(
+    '<?xml version="1.0"?><input-forms><form-map><name-map collection-handle="1/1" form-name="x"/></form-map>' +
+      '<form-definitions><form name="x" /></form-definitions></input-forms>',
+  );
+
+  function createUseCase() {
+    const engine = {
+      execute: vi.fn(async (_input: string, output: string) => {
+        await mkdir(output, { recursive: true });
+        await writeFile(join(output, 'submission-forms.xml'), '<input-forms />');
+        await writeFile(join(output, 'item-submission.xml'), '<item-submission />');
+      }),
+    };
+    const archive: IArchiveService = {
+      createZip: async (_files, destination) => {
+        await writeFile(destination, 'zip-test');
+      },
+    };
+    const storage = new LocalTemporaryStorage();
+    vi.spyOn(storage, 'createWorkspace').mockImplementation(async () => {
+      const workspace = await mkdtemp(join(tmpdir(), 'dspace-converter-test-'));
+      workspaces.push(workspace);
+      return workspace;
+    });
+    return { engine, useCase: new ConvertDspaceFiles(storage, engine, archive) };
+  }
+
+  it('passes the keepCommentedFields option to the engine', async () => {
+    const { engine, useCase } = createUseCase();
+
+    const artifact = await useCase.execute(
+      { filename: 'input-forms.xml', content: validInputForms },
+      { keepCommentedFields: false },
+    );
+    expect(engine.execute).toHaveBeenCalledWith(expect.any(String), expect.any(String), {
+      keepCommentedFields: false,
+    });
+    await artifact.cleanup();
+  });
+
+  it('keeps commented fields when no option is given', async () => {
+    const { engine, useCase } = createUseCase();
+
+    const artifact = await useCase.execute({ filename: 'input-forms.xml', content: validInputForms });
+    expect(engine.execute).toHaveBeenCalledWith(expect.any(String), expect.any(String), {
+      keepCommentedFields: true,
+    });
+    await artifact.cleanup();
+  });
+});

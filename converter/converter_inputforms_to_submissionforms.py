@@ -11,6 +11,7 @@ Mudanças aplicadas:
 - Normaliza input-types (twobox->name, checkbox->dropdown, etc)
 - Adiciona atributos novos (visibility, type-bind)
 - Garante que todos os campos têm os elementos obrigatórios
+- Preserva campos comentados (opcional), mantendo o conteúdo em comentários
 """
 
 import xml.etree.ElementTree as ET
@@ -23,10 +24,15 @@ class InputFormsToSubmissionFormsConverter:
     
     INDENT = "    "
     
-    def __init__(self, verbose: bool = False):
+    # Marcador temporário para blocos de campos comentados, convertido em comentário na saída
+    COMMENTED_FIELD_TAG = "commented-field"
+
+    def __init__(self, verbose: bool = False, keep_commented_fields: bool = True):
         self.verbose = verbose
+        self.keep_commented_fields = keep_commented_fields
         self.converted_forms_count = 0
         self.converted_fields_count = 0
+        self.preserved_commented_fields_count = 0
     
     def log(self, message: str, level: str = "INFO") -> None:
         """Log mensagens de conversão"""
@@ -34,12 +40,65 @@ class InputFormsToSubmissionFormsConverter:
             print(f"[{level}] {message}")
     
     def parse_xml_file(self, path: Path) -> ET.Element:
-        """Parse arquivo XML"""
+        """Parse arquivo XML, mantendo os comentários para identificar campos comentados"""
         try:
-            tree = ET.parse(path)
+            parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+            tree = ET.parse(path, parser=parser)
             return tree.getroot()
         except ET.ParseError as e:
             raise ValueError(f"Erro ao parsear XML: {e}")
+
+    def count_commented_fields(self, comment: ET.Element) -> int:
+        """
+        Conta os <field> XML completos contidos no conteúdo do comentário.
+        O conteúdo é interpretado pelo parser XML (não por regex), para reconhecer
+        blocos com estruturas aninhadas.
+        """
+        try:
+            fragment = ET.fromstring(f"<fragment>{comment.text or ''}</fragment>")
+        except ET.ParseError:
+            if "<field" in (comment.text or ""):
+                self.log("Campo comentado com XML inválido não foi preservado", "WARNING")
+            return 0
+        return len(fragment.findall(".//field"))
+
+    def mark_commented_fields(self, root: ET.Element) -> None:
+        """
+        Substitui, em form e page, os comentários que contêm campos por marcadores,
+        mantendo a posição original entre os campos ativos
+        """
+        for parent in list(root.iter()):
+            if parent.tag not in ("form", "page"):
+                continue
+            for index, child in enumerate(parent):
+                if child.tag is not ET.Comment:
+                    continue
+                fields_count = self.count_commented_fields(child)
+                if fields_count == 0:
+                    continue
+                marker = ET.Element(self.COMMENTED_FIELD_TAG)
+                marker.text = child.text
+                marker.tail = child.tail
+                parent[index] = marker
+                self.preserved_commented_fields_count += fields_count
+
+    @classmethod
+    def remove_comments(cls, elem: ET.Element) -> None:
+        """
+        Remove os comentários de um elemento e de seus descendentes.
+        O texto ao redor de cada comentário é preservado, como faz o parser padrão.
+        """
+        previous = None
+        for child in list(elem):
+            if child.tag is ET.Comment:
+                if previous is None:
+                    elem.text = (elem.text or "") + (child.tail or "")
+                else:
+                    previous.tail = (previous.tail or "") + (child.tail or "")
+                elem.remove(child)
+            else:
+                cls.remove_comments(child)
+                previous = child
     
     def normalize_field(self, field: ET.Element) -> None:
         """Remove input-type duplicadas, mantendo apenas a primeira"""
@@ -161,24 +220,34 @@ class InputFormsToSubmissionFormsConverter:
         pages = source_form.findall("page")
         self.log(f"  Páginas encontradas: {len(pages)}")
         
-        for page in pages:
-            page_number = page.get("number", "1")
-            
-            # Adicionar comentário de página para referência
-            page_comment = ET.Comment(f" page{page_number} ")
-            destination_form.append(page_comment)
-            
-            # Converter campos em rows
-            fields = page.findall("field")
-            self.log(f"  Página {page_number}: {len(fields)} campos")
-            
-            for field in fields:
-                row = ET.SubElement(destination_form, "row")
-                converted_field = self.convert_field(field)
-                row.append(converted_field)
+        for item in source_form:
+            if item.tag == "page":
+                self.convert_page(item, destination_form)
+            elif item.tag == self.COMMENTED_FIELD_TAG:
+                destination_form.append(ET.Comment(item.text))
         
         self.converted_forms_count += 1
         return destination_form
+
+    def convert_page(self, source_page: ET.Element, destination_form: ET.Element) -> None:
+        """Converte uma página em rows, mantendo a posição dos campos comentados"""
+        page_number = source_page.get("number", "1")
+
+        # Adicionar comentário de página para referência
+        page_comment = ET.Comment(f" page{page_number} ")
+        destination_form.append(page_comment)
+
+        # Converter campos em rows
+        fields = source_page.findall("field")
+        self.log(f"  Página {page_number}: {len(fields)} campos")
+
+        for item in source_page:
+            if item.tag == "field":
+                row = ET.SubElement(destination_form, "row")
+                converted_field = self.convert_field(item)
+                row.append(converted_field)
+            elif item.tag == self.COMMENTED_FIELD_TAG:
+                destination_form.append(ET.Comment(item.text))
     
     def convert(self, source_path: Path, destination_path: Path) -> dict:
         """
@@ -195,6 +264,9 @@ class InputFormsToSubmissionFormsConverter:
         
         # Parse arquivo de entrada
         source_root = self.parse_xml_file(source_path)
+        if self.keep_commented_fields:
+            self.mark_commented_fields(source_root)
+        self.remove_comments(source_root)
         form_definitions = source_root.find("form-definitions")
         
         if form_definitions is None:
@@ -238,6 +310,7 @@ class InputFormsToSubmissionFormsConverter:
         stats = {
             "forms_converted": self.converted_forms_count,
             "fields_converted": self.converted_fields_count,
+            "commented_fields_kept": self.preserved_commented_fields_count,
             "input_file": str(source_path),
             "output_file": str(destination_path),
         }

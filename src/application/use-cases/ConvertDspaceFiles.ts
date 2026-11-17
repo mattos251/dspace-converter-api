@@ -8,6 +8,7 @@ import { InvalidFileError } from '../../domain/errors/InvalidFileError.js';
 import { OutputValidationError } from '../../domain/errors/OutputValidationError.js';
 import { DSpaceXmlValidator } from '../../domain/validators/DSpaceXmlValidator.js';
 import type { ConversionArtifactDTO } from '../dto/ConversionArtifactDTO.js';
+import { DEFAULT_CONVERSION_OPTIONS, type ConversionOptions } from '../../domain/value-objects/ConversionOptions.js';
 
 const OUTPUT_FILES = ['submission-forms.xml', 'item-submission.xml'] as const;
 const parser = new XMLParser({ processEntities: false, ignoreAttributes: false });
@@ -19,7 +20,10 @@ export class ConvertDspaceFiles {
     private readonly archive: IArchiveService,
   ) {}
 
-  async execute(file: { filename: string; content: Buffer }): Promise<ConversionArtifactDTO> {
+  async execute(
+    file: { filename: string; content: Buffer },
+    options: ConversionOptions = DEFAULT_CONVERSION_OPTIONS,
+  ): Promise<ConversionArtifactDTO> {
     DSpaceXmlValidator.validate(file.content, file.filename);
 
     const xml = file.content.toString('utf8');
@@ -38,7 +42,7 @@ export class ConvertDspaceFiles {
       const inputPath = await this.storage.writeInput(workspace, 'input-forms.xml', file.content);
       const outputDirectory = join(workspace, 'output');
       await mkdir(outputDirectory, { recursive: true });
-      await this.engine.execute(inputPath, outputDirectory);
+      await this.engine.execute(inputPath, outputDirectory, options);
 
       const outputPaths = OUTPUT_FILES.map((name) => join(outputDirectory, name));
       for (const outputPath of outputPaths) {

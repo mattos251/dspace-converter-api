@@ -46,12 +46,30 @@ curl -X POST http://localhost:3000/api/v1/conversions \
 - `submission-forms.xml`
 - `item-submission.xml`
 
+#### Campos comentados
+
+Campos do `input-forms.xml` que estão dentro de comentários XML podem ser preservados ou removidos no `submission-forms.xml`, pelo parâmetro de query `keepCommentedFields`:
+
+| Valor | Comportamento |
+|---|---|
+| `true` (padrão) | Mantém os campos comentados como comentários, na mesma posição e com o conteúdo original |
+| `false` | Remove os campos comentados |
+
+Apenas `true` e `false` são aceitos; outros valores retornam `400` com código `INVALID_PARAMETER`.
+
+```bash
+curl -X POST "http://localhost:3000/api/v1/conversions?keepCommentedFields=false" \
+  -F "file=@./input-forms.xml" \
+  --output dspace-conversion.zip
+```
+
 ### Erros
 
 Formato: `{ "error": { "code": "...", "message": "..." } }`
 
 Códigos:
 - `INVALID_FILE` - Arquivo não é um XML válido ou não é DSpace 5
+- `INVALID_PARAMETER` - Parâmetro de query inválido (ex.: `keepCommentedFields` diferente de `true`/`false`)
 - `CONVERSION_FAILED` - Erro durante conversão Python
 - `FILE_TOO_LARGE` - Arquivo excede limite
 - `OUTPUT_VALIDATION_FAILED` - Saída inválida
@@ -231,6 +249,7 @@ npm run dev        # Desenvolvimento com tsx watch
 npm run build      # Compilar TypeScript
 npm run start      # Produção (Node)
 npm run test       # Testes
+npm run test:python # Testes dos scripts Python
 npm run lint       # ESLint
 npm run format     # Prettier
 ```
@@ -239,8 +258,8 @@ npm run format     # Prettier
 
 Localização: `converter/`
 
-- `main.py` - Orquestrador principal, valida entrada/saída
-- `converter_inputforms_to_submissionforms.py` - Converte formulários (input-forms → submission-forms)
+- `main.py` - Orquestrador principal, valida entrada/saída (`--keep-commented-fields` / `--no-keep-commented-fields`)
+- `converter_inputforms_to_submissionforms.py` - Converte formulários (input-forms → submission-forms), preservando ou removendo campos comentados
 - `converter_inputsubmission_to_itemsubmission.py` - Converte processos (input-forms → item-submission)
 
 ### Fluxo Python
