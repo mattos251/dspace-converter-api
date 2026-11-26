@@ -2,11 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ConvertDspaceFiles } from '../../src/application/use-cases/ConvertDspaceFiles.js';
-import { InvalidFileError } from '../../src/domain/errors/InvalidFileError.js';
-import type { IConversionEngine } from '../../src/domain/interfaces/IConversionEngine.js';
-import type { IArchiveService } from '../../src/domain/interfaces/IArchiveService.js';
-import { LocalTemporaryStorage } from '../../src/infrastructure/storage/LocalTemporaryStorage.js';
+import { ConvertDspaceFiles } from '../../src/conversion/ConvertDspaceFiles.js';
+import { InvalidFileError } from '../../src/conversion/errors.js';
+import type { IArchiveService, IConversionEngine } from '../../src/conversion/ports.js';
+import { LocalTemporaryStorage } from '../../src/adapters/LocalTemporaryStorage.js';
 
 const validXml = Buffer.from(
   '<?xml version="1.0"?><input-forms><form-definitions /></input-forms>',

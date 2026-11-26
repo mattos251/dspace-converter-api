@@ -28,7 +28,7 @@ Copy-Item .env.example .env
 npm run start
 ```
 
-A API inicia em `http://localhost:3000`. Acesse `http://localhost:3000/index.html` para a interface web.
+A API inicia em `http://localhost:3000` (health check em `/health`).
 
 ## 📡 API
 
@@ -62,7 +62,7 @@ Códigos:
 ### Visão Geral
 
 ```
-Frontend (HTML/Vue)
+Cliente HTTP (curl ou outra aplicação)
     ↓
 HTTP Controller (Presentation)
     ↓
@@ -77,48 +77,37 @@ Archive Service
 Download ZIP
 ```
 
-### Padrão: Clean Architecture + Layered
+### Organização por responsabilidade
 
-O projeto segue princípios SOLID com 4 camadas:
+O código fica em três áreas. As dependências apontam para dentro: `conversion/` não conhece HTTP nem disco.
 
-#### 1. **Presentation Layer** (`src/presentation/`)
+#### 1. **HTTP** (`src/http/`)
 **Responsabilidade:** Receber requisições HTTP e enviar respostas
 
 Arquivos:
-- `http/controllers/ConversionController.ts` - Valida multipart, chama use case
-- `http/routes/conversion.routes.ts` - Define rotas da API
-- `http/validators/conversion.schema.ts` - Validação de entrada Fastify
+- `ConversionController.ts` - Lê o multipart e chama o caso de uso
+- `conversion.routes.ts` - Define as rotas da API
+- `error-handler.ts` - Converte erros em respostas JSON (`{ error: { code, message } }`)
 
-#### 2. **Application Layer** (`src/application/`)
-**Responsabilidade:** Orquestrar a lógica de negócio
-
-Arquivos:
-- `use-cases/ConvertDspaceFiles.ts` - Coordena: validação → conversão → compactação
-- `dto/ConversionArtifactDTO.ts` - Estrutura do resultado
-
-#### 3. **Domain Layer** (`src/domain/`)
-**Responsabilidade:** Regras de negócio puras, entidades, interfaces
+#### 2. **Conversão** (`src/conversion/`)
+**Responsabilidade:** Regras da conversão, sem Fastify e sem acesso direto a disco
 
 Arquivos:
-- `errors/` - Classes de erro customizadas
-  - `AppError.ts` - Erro base da aplicação
-  - `ConversionError.ts` - Erro na conversão (422)
-  - `InvalidFileError.ts` - Arquivo inválido (400)
-  - `OutputValidationError.ts` - Saída inválida (422)
-- `interfaces/` - Contratos
-  - `IConversionEngine.ts` - Motor de conversão (Python)
-  - `IFileStorage.ts` - Armazenamento temporário
-  - `IArchiveService.ts` - Serviço de ZIP
-- `validators/DSpaceXmlValidator.ts` - Validações de segurança e estrutura
+- `ConvertDspaceFiles.ts` - Caso de uso: valida → converte → valida saída → compacta
+- `DSpaceXmlValidator.ts` - Validações do XML de entrada e da saída
+- `ports.ts` - Contratos (`IConversionEngine`, `IFileStorage`, `IArchiveService`)
+- `errors.ts` - Erros da aplicação (`InvalidFileError` 400, `ConversionError` 422, `OutputValidationError`)
+- `ConversionArtifactDTO.ts` - Resultado da conversão (caminho do ZIP e limpeza)
 
-#### 4. **Infrastructure Layer** (`src/infrastructure/`)
-**Responsabilidade:** Implementações técnicas
+#### 3. **Adaptadores** (`src/adapters/`)
+**Responsabilidade:** Implementar os contratos com tecnologias concretas
 
 Arquivos:
-- `converters/PythonConversionEngine.ts` - Executa Python via subprocess
-- `storage/LocalTemporaryStorage.ts` - Gerencia arquivos /tmp
-- `archive/ZipArchiveService.ts` - Compacta com archiver
-- `logger/logger.ts` - Configuração de logs Pino
+- `PythonConversionEngine.ts` - Executa o Python via subprocess
+- `LocalTemporaryStorage.ts` - Workspaces temporários em /tmp
+- `ZipArchiveService.ts` - Compacta com archiver
+
+Também em `src/`: `app.ts` (monta o Fastify), `server.ts` (inicia o servidor), `config.ts` (lê e valida as variáveis de ambiente) e `logger.ts` (opções do log Pino).
 
 ### Fluxo de Uma Requisição
 
@@ -135,7 +124,7 @@ Arquivos:
    - LocalTemporaryStorage.writeInput() → Salva XML
    ↓
 4. PythonConversionEngine.execute()
-   - Executa: python converter/main.py [input] [output_dir]
+   - Executa: python python/run_conversion.py [input] [output_dir]
    - Captura stderr para debugging
    ↓
 5. Validação de saída
@@ -159,18 +148,18 @@ Arquivos:
 **Camada 1: Validator (DSpaceXmlValidator)**
 ```
 ✓ Nome do arquivo = "input-forms.xml"
-✓ Tamanho: 100 bytes - 5MB
+✓ Tamanho: mínimo 100 bytes, máximo definido por `MAX_FILE_SIZE_MB`
 ✓ XML bem-formado
 ✓ Sem conteúdo suspeito (<script>, eval(), etc)
 ✓ Sem XXE (XML External Entity)
 ✓ Sem DTD malicioso
 ✓ Estrutura DSpace 5 (presença de <form-definitions> e <form-map>)
+✓ Elemento raiz <input-forms>
 ```
 
-**Camada 2: Parser (ConvertDspaceFiles)**
+**Camada 2: Caso de uso (ConvertDspaceFiles)**
 ```
-✓ Parseia e valida estrutura XML esperada
-✓ Valida XMLs de saída após conversão Python
+✓ Confere se a saída do Python existe e é XML bem-formado
 ```
 
 **Camada 3: Python Scripts**
@@ -186,16 +175,17 @@ Arquivos:
 |---|---:|---|
 | `HOST` | `0.0.0.0` | Interface de rede |
 | `PORT` | `3000` | Porta HTTP |
-| `NODE_ENV` | `development` | Ambiente |
 | `PYTHON_BIN` | `python3` (Linux) / `python` (Windows) | Caminho Python |
 | `MAX_FILE_SIZE_MB` | `10` | Tamanho máximo upload |
 | `CONVERSION_TIMEOUT_MS` | `60000` | Timeout motor Python (ms) |
 | `CORS_ORIGIN` | `http://localhost:5173` | Origens CORS, separadas por vírgula |
+| `LOG_LEVEL` | `info` | Nível de log: `debug`, `info`, `warn`, `error` ou `silent` |
+
+Valores numéricos inválidos (ex.: `PORT=abc`) impedem a inicialização do servidor, com uma mensagem que indica a variável.
 
 ### Exemplo .env
 
 ```env
-NODE_ENV=development
 HOST=0.0.0.0
 PORT=3000
 PYTHON_BIN=C:\Users\SEU_USUARIO\AppData\Local\Programs\Python\Python314\python.exe
@@ -212,7 +202,7 @@ CORS_ORIGIN=http://localhost:5173,http://localhost:5500
 2. **Path Traversal** - Valida nome de arquivo (sem `../`)
 3. **Script Injection** - Detecta `<script>`, `javascript:`, `eval()`
 4. **DTD Blocking** - Bloqueia DOCTYPE externos
-5. **Tamanho** - Limita upload a 5MB
+5. **Tamanho** - Limita upload ao valor de `MAX_FILE_SIZE_MB` (padrão 10MB)
 6. **Formato** - Valida apenas XML com estrutura DSpace 5
 
 ### Boas Práticas em Produção
@@ -237,16 +227,16 @@ npm run format     # Prettier
 
 ## 🐍 Python Scripts
 
-Localização: `converter/`
+Localização: `python/`
 
-- `main.py` - Orquestrador principal, valida entrada/saída
-- `converter_inputforms_to_submissionforms.py` - Converte formulários (input-forms → submission-forms)
-- `converter_inputsubmission_to_itemsubmission.py` - Converte processos (input-forms → item-submission)
+- `run_conversion.py` - Orquestrador principal (CLI), valida entrada/saída
+- `forms_converter.py` - Converte formulários (input-forms → submission-forms)
+- `item_submission_converter.py` - Converte processos (input-forms → item-submission)
 
 ### Fluxo Python
 
 ```
-main.py
+run_conversion.py
   ├─ Valida input-forms.xml existe
   ├─ Cria diretório output/
   │
@@ -274,19 +264,13 @@ curl -X POST http://localhost:3000/api/v1/conversions \
   --output result.zip
 ```
 
-### Com interface web
-
-1. Abra `http://localhost:3000/index.html`
-2. Selecione arquivo
-3. Clique "Converter"
-4. Baixe o ZIP
-
 ### Debugging
 
-Veja logs do servidor:
+Veja logs do servidor (formato JSON, via Pino):
 ```bash
 npm run start
-# Procure por: [DSpaceXmlValidator] ou [conversion]
+# Requisições rejeitadas: "level":40 com o código do erro (ex.: "code":"INVALID_FILE")
+# Falhas do Python: "msg":"Erro na conversão Python", com stdout e stderr do script
 ```
 
 ## 📂 Estrutura de Pastas
@@ -294,32 +278,30 @@ npm run start
 ```
 dspace-converter-api/
 ├── src/
-│   ├── domain/              # Regras de negócio
-│   │   ├── errors/
-│   │   ├── interfaces/
-│   │   └── validators/
-│   ├── application/         # Casos de uso
-│   │   ├── use-cases/
-│   │   └── dto/
-│   ├── infrastructure/      # Implementações técnicas
-│   │   ├── converters/
-│   │   ├── storage/
-│   │   ├── archive/
-│   │   └── logger/
-│   ├── presentation/        # HTTP
-│   │   └── http/
-│   │       ├── controllers/
-│   │       ├── routes/
-│   │       └── validators/
-│   └── main/                # Inicialização
-│       ├── app.ts           # Instancia Fastify
-│       └── server.ts        # Startup
-├── converter/               # Scripts Python
-│   ├── main.py
-│   ├── converter_inputforms_to_submissionforms.py
-│   └── converter_inputsubmission_to_itemsubmission.py
-├── dist/                    # Output compilado (TypeScript)
-├── index.html               # Interface web
+│   ├── server.ts              # Inicia o servidor
+│   ├── app.ts                 # Monta o Fastify (rotas, plugins, erros)
+│   ├── config.ts              # Lê e valida as variáveis de ambiente
+│   ├── logger.ts              # Opções de log (Pino)
+│   ├── http/                  # Camada HTTP
+│   │   ├── ConversionController.ts
+│   │   ├── conversion.routes.ts
+│   │   └── error-handler.ts
+│   ├── conversion/            # Regras da conversão
+│   │   ├── ConvertDspaceFiles.ts
+│   │   ├── DSpaceXmlValidator.ts
+│   │   ├── ConversionArtifactDTO.ts
+│   │   ├── errors.ts
+│   │   └── ports.ts
+│   └── adapters/              # Implementações técnicas
+│       ├── PythonConversionEngine.ts
+│       ├── LocalTemporaryStorage.ts
+│       └── ZipArchiveService.ts
+├── python/                    # Scripts Python da conversão
+│   ├── run_conversion.py
+│   ├── base_converter.py
+│   ├── forms_converter.py
+│   └── item_submission_converter.py
+├── dist/                      # Saída compilada (TypeScript)
 ├── .env                     # Configuração (git-ignored)
 ├── package.json
 ├── tsconfig.json
@@ -329,9 +311,9 @@ dspace-converter-api/
 ## 🤝 Contribuindo
 
 Ao adicionar features:
-1. Mantenha a separação de camadas
-2. Adicione validações no domain
-3. Implemente interfaces em infrastructure
+1. Mantenha a separação: código HTTP não entra em `conversion/`, e disco e processos ficam em `adapters/`
+2. Adicione validações em `conversion/DSpaceXmlValidator.ts`
+3. Novos contratos vão em `conversion/ports.ts`, e as implementações em `adapters/`
 4. Escreva testes
 
 ## 📄 Licença
